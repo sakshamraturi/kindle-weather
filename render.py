@@ -2,7 +2,7 @@
 """Render a Kindle Paperwhite 3 (1072x1448, 8-bit grayscale) weather screen.
 
 Usage: render.py [out.png]
-Data: Open-Meteo (no API key). Location: Karnal, Haryana.
+Data: Open-Meteo (no API key). Location: Gurugram, Haryana.
 """
 import json
 import math
@@ -14,9 +14,9 @@ from zoneinfo import ZoneInfo
 
 from PIL import Image, ImageDraw, ImageFont
 
-PLACE = "Karnal"
+PLACE = "Gurugram"
 REGION = "Haryana"
-LAT, LON = 29.6857, 76.9905
+LAT, LON = 28.4595, 77.0266
 TZ = "Asia/Kolkata"
 W, H = 1072, 1448
 S = 2  # supersample factor for smooth edges
