@@ -179,11 +179,9 @@ def render(data, out):
     air = (data.get("air") or {}).get("current") or {}
     now = datetime.now(ZoneInfo(TZ))
 
-    # header: clock (time this image was made) + place
-    text(d, (60, 28), now.strftime("%-I:%M"), font(FONT_BOLD, 130))
-    tw = d.textlength(now.strftime("%-I:%M"), font=font(FONT_BOLD, 130)) / S
-    text(d, (60 + tw + 14, 120), now.strftime("%p").lower(), font(FONT_BOLD, 50))
-    text(d, (60, 168), now.strftime("%A, %-d %B %Y"), font(FONT_REG, 38))
+    # header: date + place
+    text(d, (60, 40), now.strftime("%A"), font(FONT_BOLD, 96))
+    text(d, (60, 150), now.strftime("%-d %B %Y"), font(FONT_REG, 44))
     text(d, (W - 60, 50), PLACE, font(FONT_BOLD, 58), "ra")
     text(d, (W - 60, 120), REGION, font(FONT_REG, 34), "ra")
     hline(d, 235, w=4)
@@ -249,7 +247,7 @@ def render(data, out):
         if i < 4:
             hline(d, y + rowh, w=1)
     hline(d, top + 5 * rowh + 8, w=4)
-    text(d, (W // 2, H - 30), f"Updated {now.strftime('%-I:%M %p').lower()} · refreshes every 15-30 min",
+    text(d, (W // 2, H - 30), f"Updated {now.strftime('%-I:%M %p').lower()} · refreshes every 15 min",
          font(FONT_REG, 24), "ms", fill=90)
 
     img = img.resize((W, H), Image.LANCZOS)
