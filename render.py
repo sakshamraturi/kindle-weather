@@ -7,6 +7,7 @@ Data: Open-Meteo (no API key). Location: Karnal, Haryana.
 import json
 import math
 import sys
+import time
 import urllib.request
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -70,12 +71,24 @@ AIR_URL = (
 )
 
 
+def get_json(url, tries=5):
+    # open-meteo is sometimes slow/throttled for shared CI IPs: retry with backoff
+    for i in range(tries):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "kindle-weather/1.0"})
+            with urllib.request.urlopen(req, timeout=20) as r:
+                return json.load(r)
+        except Exception as e:
+            print(f"attempt {i + 1}/{tries} failed for {url.split('?')[0]}: {e}", file=sys.stderr)
+            if i == tries - 1:
+                raise
+            time.sleep(3 * (i + 1))
+
+
 def fetch():
-    with urllib.request.urlopen(URL, timeout=20) as r:
-        data = json.load(r)
+    data = get_json(URL)
     try:  # air quality is optional: show dashes if it fails
-        with urllib.request.urlopen(AIR_URL, timeout=20) as r:
-            data["air"] = json.load(r)
+        data["air"] = get_json(AIR_URL, tries=2)
     except Exception as e:
         print("air quality unavailable:", e, file=sys.stderr)
     return data
