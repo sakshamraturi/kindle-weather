@@ -46,7 +46,7 @@ URL = (
     "weather_code,wind_speed_10m"
     "&daily=weather_code,temperature_2m_max,temperature_2m_min,"
     "precipitation_probability_max,sunrise,sunset"
-    f"&timezone={TZ}&forecast_days=5"
+    f"&timezone={TZ}&forecast_days=4"
 )
 
 WMO = {
@@ -192,20 +192,20 @@ def render(data, out):
     text(d, (W - 60, 245), f"{round(cur['temperature_2m'])}°", font(FONT_BOLD, 190), "ra")
     text(d, (W - 60, 440), label, font(FONT_REG, 46), "ra")
     text(d, (W - 60, 498), f"Feels like {round(cur['apparent_temperature'])}°", font(FONT_REG, 36), "ra")
-    hline(d, 560)
+    hline(d, 570)
 
     # air quality
     v = air.get("us_aqi")
     cat, _ = aqi_info(v)
-    text(d, (60, 585), "AIR QUALITY (US AQI)", font(FONT_REG, 28))
-    text(d, (60, 620), "—" if v is None else str(round(v)), font(FONT_BOLD, 110))
+    text(d, (60, 600), "AIR QUALITY (US AQI)", font(FONT_REG, 28))
+    text(d, (60, 638), "—" if v is None else str(round(v)), font(FONT_BOLD, 110))
     vw = d.textlength("—" if v is None else str(round(v)), font=font(FONT_BOLD, 110)) / S
-    text(d, (60 + vw + 28, 660), cat, font(FONT_BOLD, 44))
+    text(d, (60 + vw + 28, 678), cat, font(FONT_BOLD, 44))
     pm25, pm10 = air.get("pm2_5"), air.get("pm10")
-    text(d, (W - 60, 592), "PM2.5 " + ("—" if pm25 is None else f"{round(pm25)}"), font(FONT_REG, 34), "ra")
-    text(d, (W - 60, 636), "PM10 " + ("—" if pm10 is None else f"{round(pm10)}"), font(FONT_REG, 34), "ra")
+    text(d, (W - 60, 610), "PM2.5 " + ("—" if pm25 is None else f"{round(pm25)}"), font(FONT_REG, 34), "ra")
+    text(d, (W - 60, 656), "PM10 " + ("—" if pm10 is None else f"{round(pm10)}"), font(FONT_REG, 34), "ra")
     # gauge 0..300 with category ticks
-    gx0, gx1, gy = 60, W - 60, 770
+    gx0, gx1, gy = 60, W - 60, 790
     gw = gx1 - gx0
     d.rectangle([gx0 * S, gy * S, gx1 * S, (gy + 18) * S], outline=0, width=2 * S)
     for t in (50, 100, 150, 200):
@@ -214,7 +214,7 @@ def render(data, out):
     if v is not None:
         x = gx0 + gw * min(v, 300) / 300
         d.rectangle([gx0 * S, gy * S, x * S, (gy + 18) * S], fill=0)
-    hline(d, 815)
+    hline(d, 850)
 
     # stats row
     stats = [
@@ -226,27 +226,27 @@ def render(data, out):
     colw = (W - 120) / 4
     for i, (k, val) in enumerate(stats):
         x = 60 + colw * i + colw / 2
-        text(d, (x, 835), k, font(FONT_REG, 24), "ma")
-        text(d, (x, 868), val, font(FONT_BOLD, 38), "ma")
-    hline(d, 930)
+        text(d, (x, 875), k, font(FONT_REG, 24), "ma")
+        text(d, (x, 910), val, font(FONT_BOLD, 38), "ma")
+    hline(d, 985)
 
     # 5-day forecast
-    top, rowh = 935, 90
-    for i in range(5):
+    top, rowh = 990, 94
+    for i in range(4):
         y = top + i * rowh
         day = datetime.fromisoformat(daily["time"][i])
         name = "Today" if i == 0 else day.strftime("%A")
         _, k = WMO.get(daily["weather_code"][i], ("—", "cloud"))
         text(d, (60, y + rowh / 2), name, font(FONT_BOLD if i == 0 else FONT_REG, 38), "lm")
-        icon(d, k, 470, y + rowh / 2, 68)
+        icon(d, k, 470, y + rowh / 2, 74)
         pp = daily["precipitation_probability_max"][i]
         text(d, (600, y + rowh / 2), f"{pp}%" if pp is not None else "", font(FONT_REG, 32), "lm")
         text(d, (W - 60, y + rowh / 2),
              f"{round(daily['temperature_2m_max'][i])}°  /  {round(daily['temperature_2m_min'][i])}°",
              font(FONT_BOLD, 40), "rm")
-        if i < 4:
+        if i < 3:
             hline(d, y + rowh, w=1)
-    hline(d, top + 5 * rowh + 8, w=4)
+    hline(d, top + 4 * rowh + 8, w=4)
     text(d, (W // 2, H - 30), f"Updated {now.strftime('%-I:%M %p').lower()} · refreshes every 15 min",
          font(FONT_REG, 24), "ms", fill=90)
 
