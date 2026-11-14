@@ -47,7 +47,7 @@ URL = (
     "weather_code,wind_speed_10m"
     "&daily=weather_code,temperature_2m_max,temperature_2m_min,"
     "precipitation_probability_max,sunrise,sunset"
-    f"&timezone={TZ}&forecast_days=4"
+    f"&timezone={TZ}&forecast_days=5"
 )
 
 WMO = {
@@ -79,7 +79,7 @@ def get_json(url, tries=5):
             with urllib.request.urlopen(req, timeout=20) as r:
                 return json.load(r)
         except Exception as e:
-            print(f"attempt {i + 1}/{tries} failed for {url.split('?')[0]}: {e}", file=sys.stderr)
+            print(f"attempt {i + 1}/{tries} failed for {url.split('/')[2]}: {e}", file=sys.stderr)
             if i == tries - 1:
                 raise
             time.sleep(3 * (i + 1))
@@ -91,6 +91,17 @@ def fetch():
         data["air"] = get_json(AIR_URL, tries=2)
     except Exception as e:
         print("air quality unavailable:", e, file=sys.stderr)
+    sched = os.environ.get("SCHEDULE_URL", "").strip()
+    if sched:
+        try:  # events + tasks come from the Google Apps Script feed
+            data["sched"] = get_json(sched, tries=3)
+            if data["sched"].get("error"):
+                raise RuntimeError(data["sched"]["error"])
+            for e in data["sched"].get("errors") or []:
+                print("schedule warning:", e, file=sys.stderr)
+        except Exception as e:
+            print("schedule unavailable:", e, file=sys.stderr)
+            data.pop("sched", None)
     return data
 
 
@@ -185,83 +196,167 @@ def aqi_info(v):
             return name, v
 
 
+class Off:
+    """Draw helper that shifts everything down/up by oy final pixels."""
+    def __init__(self, d, oy):
+        self.d, self.oy = d, oy * S
+
+    def _y(self, pts):
+        if isinstance(pts[0], (tuple, list)):
+            return [(p[0], p[1] + self.oy) for p in pts]
+        return [v + (self.oy if i % 2 else 0) for i, v in enumerate(pts)]
+
+    def text(self, xy, *a, **k): return self.d.text((xy[0], xy[1] + self.oy), *a, **k)
+    def line(self, pts, **k): return self.d.line(self._y(pts), **k)
+    def rectangle(self, pts, **k): return self.d.rectangle(self._y(pts), **k)
+    def ellipse(self, pts, **k): return self.d.ellipse(self._y(pts), **k)
+    def polygon(self, pts, **k): return self.d.polygon(self._y(pts), **k)
+    def textlength(self, *a, **k): return self.d.textlength(*a, **k)
+
+
+def fit(d, s, path, size, maxw):
+    """Shrink the font a little, then truncate with an ellipsis, to fit maxw px."""
+    while size > 22 and d.textlength(s, font=font(path, size)) / S > maxw:
+        size -= 2
+    f = font(path, size)
+    if d.textlength(s, font=f) / S > maxw:
+        while len(s) > 1 and d.textlength(s + "…", font=f) / S > maxw:
+            s = s[:-1]
+        s = s.rstrip() + "…"
+    return s, f
+
+
 def render(data, out):
     img = Image.new("L", (W * S, H * S), 255)
-    d = ImageDraw.Draw(img)
+    d0 = ImageDraw.Draw(img)
+    d = d0
+    X0, X1 = 60, W - 60
     cur, daily = data["current"], data["daily"]
     air = (data.get("air") or {}).get("current") or {}
+    sched = data.get("sched")
     now = datetime.now(ZoneInfo(TZ))
+    today = now.date()
 
-    # header: date + place
-    text(d, (60, 40), now.strftime("%A"), font(FONT_BOLD, 96))
-    text(d, (60, 150), now.strftime("%-d %B %Y"), font(FONT_REG, 44))
-    text(d, (W - 60, 50), PLACE, font(FONT_BOLD, 58), "ra")
-    text(d, (W - 60, 120), REGION, font(FONT_REG, 34), "ra")
-    hline(d, 235, w=4)
+    def F(sz, bold=False): return font(FONT_BOLD if bold else FONT_REG, sz)
+    def label(x, y, s): text(d, (x, y), s, F(22, True), fill=90)
+    def box(x0, y0, x1, y1, fill=None, outline=None, w=2):
+        d.rectangle([x0 * S, y0 * S, x1 * S, y1 * S], fill=fill, outline=outline, width=w * S)
 
-    # current conditions
-    label, kind = WMO.get(cur["weather_code"], ("—", "cloud"))
-    icon(d, kind, 250, 395, 270)
-    text(d, (W - 60, 245), f"{round(cur['temperature_2m'])}°", font(FONT_BOLD, 190), "ra")
-    text(d, (W - 60, 440), label, font(FONT_REG, 46), "ra")
-    text(d, (W - 60, 498), f"Feels like {round(cur['apparent_temperature'])}°", font(FONT_REG, 36), "ra")
-    hline(d, 570)
+    # ---- header: date (left), place + sun times (right)
+    text(d, (X0, 34), now.strftime("%A"), F(86, True))
+    text(d, (X0, 138), now.strftime("%-d %B %Y"), F(40))
+    text(d, (X1, 52), PLACE, F(44, True), "ra")
+    text(d, (X1, 108), REGION, F(30), "ra", fill=70)
+    text(d, (X1, 160), f"Sunrise {hm(daily['sunrise'][0])}   Sunset {hm(daily['sunset'][0])}",
+         F(26), "ra", fill=70)
+    hline(d, 232)
 
-    # air quality
+    # ---- coming up: next 5 holidays / birthdays
+    label(X0, 246, "COMING UP")
+    if sched is None:
+        text(d, (X0, 290), "Calendar unavailable", F(32), fill=110)
+        events = []
+    else:
+        events = [e for e in sched.get("events", []) if e["date"] >= today.isoformat()][:5]
+        if not events:
+            text(d, (X0, 290), "Nothing coming up", F(32), fill=110)
+    y = 278
+    for ev in events:
+        dt = datetime.fromisoformat(ev["date"]).date()
+        sub = dt.strftime("%b").upper() if (dt.month != today.month or dt.year != today.year) else dt.strftime("%a").upper()
+        kind = "HOLIDAY" if ev.get("type") == "holiday" else "BIRTHDAY"
+        kf = F(20, True)
+        tw = d.textlength(kind, font=kf) / S
+        bx0 = X1 - tw - 26
+        text(d, (X0, y + 22), str(dt.day), F(34, True), "lm")
+        text(d, (X0 + 62, y + 24), sub, F(20), "lm", fill=100)
+        name, nf = fit(d, ev["title"], FONT_REG, 34, bx0 - (X0 + 185) - 20)
+        text(d, (X0 + 185, y + 22), name, nf, "lm")
+        if kind == "HOLIDAY":
+            box(bx0, y + 8, X1, y + 38, fill=0)
+            text(d, ((bx0 + X1) / 2, y + 23), kind, kf, "mm", fill=255)
+        else:
+            box(bx0, y + 8, X1, y + 38, outline=0)
+            text(d, ((bx0 + X1) / 2, y + 23), kind, kf, "mm")
+        y += 52
+    hline(d, 556, w=1)
+
+    # everything below is laid out in a fixed block, shifted up by 100px
+    d = Off(d0, -100)
+
+    # ---- weather + air quality
+    label_, kind_ = WMO.get(cur["weather_code"], ("—", "cloud"))
+    icon(d, kind_, 150, 770, 190)
+    text(d, (290, 690), f"{round(cur['temperature_2m'])}°", F(150, True))
+    text(d, (296, 848), f"{label_} · Feels like {round(cur['apparent_temperature'])}°", F(32))
     v = air.get("us_aqi")
     cat, _ = aqi_info(v)
-    text(d, (60, 600), "AIR QUALITY (US AQI)", font(FONT_REG, 28))
-    text(d, (60, 638), "—" if v is None else str(round(v)), font(FONT_BOLD, 110))
-    vw = d.textlength("—" if v is None else str(round(v)), font=font(FONT_BOLD, 110)) / S
-    text(d, (60 + vw + 28, 678), cat, font(FONT_BOLD, 44))
+    vs = "—" if v is None else str(round(v))
+    label(680, 690, "AIR QUALITY (US AQI)")
+    text(d, (680, 716), vs, F(80, True))
+    vw = d.textlength(vs, font=F(80, True)) / S
+    cat_s, cat_f = fit(d, cat, FONT_BOLD, 30, X1 - (680 + vw + 22))
+    text(d, (680 + vw + 22, 786), cat_s, cat_f, "ls")
     pm25, pm10 = air.get("pm2_5"), air.get("pm10")
-    text(d, (W - 60, 610), "PM2.5 " + ("—" if pm25 is None else f"{round(pm25)}"), font(FONT_REG, 34), "ra")
-    text(d, (W - 60, 656), "PM10 " + ("—" if pm10 is None else f"{round(pm10)}"), font(FONT_REG, 34), "ra")
-    # gauge 0..300 with category ticks
-    gx0, gx1, gy = 60, W - 60, 790
-    gw = gx1 - gx0
-    d.rectangle([gx0 * S, gy * S, gx1 * S, (gy + 18) * S], outline=0, width=2 * S)
-    for t in (50, 100, 150, 200):
-        x = gx0 + gw * t / 300
-        d.line([x * S, gy * S, x * S, (gy + 18) * S], fill=0, width=1 * S)
-    if v is not None:
-        x = gx0 + gw * min(v, 300) / 300
-        d.rectangle([gx0 * S, gy * S, x * S, (gy + 18) * S], fill=0)
-    hline(d, 850)
+    text(d, (680, 812), "PM2.5 " + ("—" if pm25 is None else str(round(pm25))) +
+         "  ·  PM10 " + ("—" if pm10 is None else str(round(pm10))), F(24))
+    text(d, (680, 846), f"Humidity {cur['relative_humidity_2m']}%  ·  Wind {round(cur['wind_speed_10m'])} km/h", F(24))
+    hline(d, 890)
 
-    # stats row
-    stats = [
-        ("HUMIDITY", f"{cur['relative_humidity_2m']}%"),
-        ("WIND", f"{round(cur['wind_speed_10m'])} km/h"),
-        ("SUNRISE", hm(daily['sunrise'][0])),
-        ("SUNSET", hm(daily['sunset'][0])),
-    ]
-    colw = (W - 120) / 4
-    for i, (k, val) in enumerate(stats):
-        x = 60 + colw * i + colw / 2
-        text(d, (x, 875), k, font(FONT_REG, 24), "ma")
-        text(d, (x, 910), val, font(FONT_BOLD, 38), "ma")
-    hline(d, 985)
-
-    # 5-day forecast
-    top, rowh = 990, 94
+    # ---- forecast: next 4 days
+    label(X0, 902, "FORECAST")
+    colw = (X1 - X0) / 4
     for i in range(4):
-        y = top + i * rowh
-        day = datetime.fromisoformat(daily["time"][i])
-        name = "Today" if i == 0 else day.strftime("%A")
-        _, k = WMO.get(daily["weather_code"][i], ("—", "cloud"))
-        text(d, (60, y + rowh / 2), name, font(FONT_BOLD if i == 0 else FONT_REG, 38), "lm")
-        icon(d, k, 470, y + rowh / 2, 74)
-        pp = daily["precipitation_probability_max"][i]
-        text(d, (600, y + rowh / 2), f"{pp}%" if pp is not None else "", font(FONT_REG, 32), "lm")
-        text(d, (W - 60, y + rowh / 2),
-             f"{round(daily['temperature_2m_max'][i])}°  /  {round(daily['temperature_2m_min'][i])}°",
-             font(FONT_BOLD, 40), "rm")
-        if i < 3:
-            hline(d, y + rowh, w=1)
-    hline(d, top + 4 * rowh + 8, w=4)
-    text(d, (W // 2, H - 30), f"Updated {now.strftime('%-I:%M %p').lower()} · refreshes every 15 min",
-         font(FONT_REG, 24), "ms", fill=90)
+        j = i + 1
+        cx = X0 + colw * i + colw / 2
+        day = datetime.fromisoformat(daily["time"][j])
+        _, k = WMO.get(daily["weather_code"][j], ("—", "cloud"))
+        pp = daily["precipitation_probability_max"][j]
+        text(d, (cx, 932), day.strftime("%a"), F(28, True), "ma")
+        icon(d, k, cx, 1018, 80)
+        text(d, (cx, 1062), f"{round(daily['temperature_2m_max'][j])}° / {round(daily['temperature_2m_min'][j])}°",
+             F(28, True), "ma")
+        text(d, (cx, 1098), f"rain {pp}%" if pp is not None else "", F(22), "ma", fill=90)
+        if i:
+            d.line([(X0 + colw * i) * S, 930 * S, (X0 + colw * i) * S, 1128 * S], fill=170, width=S)
+    hline(d, 1150)
+
+    # ---- to do (Google Tasks)
+    label(X0, 1164, "TO DO")
+    if sched is None:
+        text(d, (X0, 1200), "Tasks unavailable", F(32), fill=110)
+        tasks = []
+    else:
+        tasks = sched.get("tasks", [])[:6]
+        if not tasks:
+            text(d, (X0, 1200), "All done", F(32), fill=110)
+    y = 1194
+    for t in tasks:
+        due, over = "", False
+        if t.get("due"):
+            dd = datetime.fromisoformat(t["due"]).date()
+            if dd < today: due, over = "Overdue", True
+            elif dd == today: due = "Today"
+            elif (dd - today).days == 1: due = "Tomorrow"
+            else: due = dd.strftime("%a %-d")
+        box(X0, y + 7, X0 + 26, y + 33, outline=0, w=3)
+        dw = d.textlength(due, font=F(26, over)) / S if due else 0
+        title, tf = fit(d, t["title"], FONT_BOLD if over else FONT_REG, 32, X1 - (X0 + 48) - dw - 24)
+        text(d, (X0 + 48, y + 20), title, tf, "lm")
+        if due:
+            text(d, (X1, y + 20), due, F(26, over), "rm", fill=0 if over else 90)
+        y += 42
+        d.line([X0 * S, (y - 2) * S, X1 * S, (y - 2) * S], fill=200, width=S)
+
+    # footer
+    cal_t = ""
+    if sched and sched.get("generated"):
+        try:
+            g = datetime.fromisoformat(sched["generated"].replace("Z", "+00:00")).astimezone(ZoneInfo(TZ))
+            cal_t = f" · Calendar & tasks {g.strftime('%-I:%M %p').lower()}"
+        except Exception:
+            pass
+    text(d, (W // 2, 1478), f"Weather {now.strftime('%-I:%M %p').lower()}{cal_t}", F(22), "ma", fill=110)
 
     img = img.resize((W, H), Image.LANCZOS)
     img.save(out, optimize=True)  # 8-bit grayscale PNG, no alpha
