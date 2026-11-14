@@ -8,7 +8,8 @@ import json
 import math
 import sys
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -63,9 +64,21 @@ WMO = {
 }
 
 
+AIR_URL = (
+    "https://air-quality-api.open-meteo.com/v1/air-quality"
+    f"?latitude={LAT}&longitude={LON}&current=us_aqi,pm2_5,pm10&timezone={TZ}"
+)
+
+
 def fetch():
     with urllib.request.urlopen(URL, timeout=20) as r:
-        return json.load(r)
+        data = json.load(r)
+    try:  # air quality is optional: show dashes if it fails
+        with urllib.request.urlopen(AIR_URL, timeout=20) as r:
+            data["air"] = json.load(r)
+    except Exception as e:
+        print("air quality unavailable:", e, file=sys.stderr)
+    return data
 
 
 def font(path, size):
@@ -150,63 +163,94 @@ def hm(iso):
     return datetime.fromisoformat(iso).strftime("%-I:%M %p").lower()
 
 
+def aqi_info(v):
+    if v is None:
+        return "—", 0
+    for hi, name in ((50, "Good"), (100, "Moderate"), (150, "Unhealthy for sensitive"),
+                     (200, "Unhealthy"), (300, "Very unhealthy"), (10**9, "Hazardous")):
+        if v <= hi:
+            return name, v
+
+
 def render(data, out):
     img = Image.new("L", (W * S, H * S), 255)
     d = ImageDraw.Draw(img)
     cur, daily = data["current"], data["daily"]
-    now = datetime.fromisoformat(cur["time"])
+    air = (data.get("air") or {}).get("current") or {}
+    now = datetime.now(ZoneInfo(TZ))
 
-    # header
-    text(d, (60, 50), PLACE, font(FONT_BOLD, 64))
-    text(d, (60, 128), REGION + ", India", font(FONT_REG, 34))
-    text(d, (W - 60, 62), now.strftime("%A"), font(FONT_BOLD, 40), "ra")
-    text(d, (W - 60, 112), now.strftime("%-d %B %Y"), font(FONT_REG, 34), "ra")
-    hline(d, 190, w=4)
+    # header: clock (time this image was made) + place
+    text(d, (60, 28), now.strftime("%-I:%M"), font(FONT_BOLD, 130))
+    tw = d.textlength(now.strftime("%-I:%M"), font=font(FONT_BOLD, 130)) / S
+    text(d, (60 + tw + 14, 120), now.strftime("%p").lower(), font(FONT_BOLD, 50))
+    text(d, (60, 168), now.strftime("%A, %-d %B %Y"), font(FONT_REG, 38))
+    text(d, (W - 60, 50), PLACE, font(FONT_BOLD, 58), "ra")
+    text(d, (W - 60, 120), REGION, font(FONT_REG, 34), "ra")
+    hline(d, 235, w=4)
 
     # current conditions
     label, kind = WMO.get(cur["weather_code"], ("—", "cloud"))
-    icon(d, kind, 300, 410, 360)
-    text(d, (W - 60, 225), f"{round(cur['temperature_2m'])}°", font(FONT_BOLD, 250), "ra")
-    text(d, (W - 60, 500), label, font(FONT_REG, 52), "ra")
+    icon(d, kind, 250, 395, 270)
+    text(d, (W - 60, 245), f"{round(cur['temperature_2m'])}°", font(FONT_BOLD, 190), "ra")
+    text(d, (W - 60, 440), label, font(FONT_REG, 46), "ra")
+    text(d, (W - 60, 498), f"Feels like {round(cur['apparent_temperature'])}°", font(FONT_REG, 36), "ra")
+    hline(d, 560)
+
+    # air quality
+    v = air.get("us_aqi")
+    cat, _ = aqi_info(v)
+    text(d, (60, 585), "AIR QUALITY (US AQI)", font(FONT_REG, 28))
+    text(d, (60, 620), "—" if v is None else str(round(v)), font(FONT_BOLD, 110))
+    vw = d.textlength("—" if v is None else str(round(v)), font=font(FONT_BOLD, 110)) / S
+    text(d, (60 + vw + 28, 660), cat, font(FONT_BOLD, 44))
+    pm25, pm10 = air.get("pm2_5"), air.get("pm10")
+    text(d, (W - 60, 592), "PM2.5 " + ("—" if pm25 is None else f"{round(pm25)}"), font(FONT_REG, 34), "ra")
+    text(d, (W - 60, 636), "PM10 " + ("—" if pm10 is None else f"{round(pm10)}"), font(FONT_REG, 34), "ra")
+    # gauge 0..300 with category ticks
+    gx0, gx1, gy = 60, W - 60, 770
+    gw = gx1 - gx0
+    d.rectangle([gx0 * S, gy * S, gx1 * S, (gy + 18) * S], outline=0, width=2 * S)
+    for t in (50, 100, 150, 200):
+        x = gx0 + gw * t / 300
+        d.line([x * S, gy * S, x * S, (gy + 18) * S], fill=0, width=1 * S)
+    if v is not None:
+        x = gx0 + gw * min(v, 300) / 300
+        d.rectangle([gx0 * S, gy * S, x * S, (gy + 18) * S], fill=0)
+    hline(d, 815)
 
     # stats row
-    hline(d, 610)
     stats = [
-        ("FEELS LIKE", f"{round(cur['apparent_temperature'])}°"),
         ("HUMIDITY", f"{cur['relative_humidity_2m']}%"),
         ("WIND", f"{round(cur['wind_speed_10m'])} km/h"),
+        ("SUNRISE", hm(daily['sunrise'][0])),
+        ("SUNSET", hm(daily['sunset'][0])),
     ]
-    colw = (W - 120) / 3
-    for i, (k, v) in enumerate(stats):
+    colw = (W - 120) / 4
+    for i, (k, val) in enumerate(stats):
         x = 60 + colw * i + colw / 2
-        text(d, (x, 645), k, font(FONT_REG, 28), "ma")
-        text(d, (x, 688), v, font(FONT_BOLD, 56), "ma")
-    hline(d, 795)
+        text(d, (x, 835), k, font(FONT_REG, 24), "ma")
+        text(d, (x, 868), val, font(FONT_BOLD, 38), "ma")
+    hline(d, 930)
 
     # 5-day forecast
-    top, rowh = 815, 100
+    top, rowh = 935, 90
     for i in range(5):
         y = top + i * rowh
         day = datetime.fromisoformat(daily["time"][i])
         name = "Today" if i == 0 else day.strftime("%A")
         _, k = WMO.get(daily["weather_code"][i], ("—", "cloud"))
-        text(d, (60, y + rowh / 2), name, font(FONT_BOLD if i == 0 else FONT_REG, 42), "lm")
-        icon(d, k, 470, y + rowh / 2, 76)
+        text(d, (60, y + rowh / 2), name, font(FONT_BOLD if i == 0 else FONT_REG, 38), "lm")
+        icon(d, k, 470, y + rowh / 2, 68)
         pp = daily["precipitation_probability_max"][i]
-        text(d, (610, y + rowh / 2), f"{pp}%" if pp is not None else "", font(FONT_REG, 34), "lm")
+        text(d, (600, y + rowh / 2), f"{pp}%" if pp is not None else "", font(FONT_REG, 32), "lm")
         text(d, (W - 60, y + rowh / 2),
              f"{round(daily['temperature_2m_max'][i])}°  /  {round(daily['temperature_2m_min'][i])}°",
-             font(FONT_BOLD, 44), "rm")
+             font(FONT_BOLD, 40), "rm")
         if i < 4:
-            hline(d, y + rowh, x0=60, x1=W - 60, w=1)
-    hline(d, top + 5 * rowh + 10, w=4)
-
-    # sun times + updated
-    y = top + 5 * rowh + 40
-    text(d, (60, y), f"Sunrise {hm(daily['sunrise'][0])}", font(FONT_REG, 40))
-    text(d, (W - 60, y), f"Sunset {hm(daily['sunset'][0])}", font(FONT_REG, 40), "ra")
-    text(d, (W // 2, H - 24), f"Updated {now.strftime('%-I:%M %p').lower()}",
-         font(FONT_REG, 26), "ms", fill=90)
+            hline(d, y + rowh, w=1)
+    hline(d, top + 5 * rowh + 8, w=4)
+    text(d, (W // 2, H - 30), f"Updated {now.strftime('%-I:%M %p').lower()} · refreshes every 15-30 min",
+         font(FONT_REG, 24), "ms", fill=90)
 
     img = img.resize((W, H), Image.LANCZOS)
     img.save(out, optimize=True)  # 8-bit grayscale PNG, no alpha
