@@ -2,6 +2,8 @@
   "items": [
     { "name": "Weather: Test (shows a message)", "priority": 1, "action": "./test.sh", "exit": false, "status": true },
     { "name": "Weather: Start", "priority": 2, "action": "./start.sh", "exit": true, "status": false },
-    { "name": "Weather: Stop (back to Kindle)", "priority": 3, "action": "./stop.sh", "exit": true, "status": false }
+    { "name": "Weather: Stop (back to Kindle)", "priority": 3, "action": "./stop.sh", "exit": true, "status": false },
+    { "name": "Weather: Auto-start ON (after reboot)", "priority": 4, "action": "./autostart.sh on", "exit": false, "status": true },
+    { "name": "Weather: Auto-start OFF", "priority": 5, "action": "./autostart.sh off", "exit": false, "status": true }
   ]
 }
